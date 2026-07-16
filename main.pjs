@@ -1,0 +1,45 @@
+generateImage = {import:text-to-image-plugin} // generates ai powered images        
+generatorStats = {import:generator-stats-plugin} //allows you to add a page view counter and get other stats about your generator        
+generateText = {import:ai-text-plugin} //generate text (stories, poems, etc) based on an instruction        
+date = {import:date-plugin} //manipulate dates, and output them in specific formats        
+favicon = {import:favicon-plugin} //allows you to change the browser tab icon for your generator        
+commentsPlugin = {import:comments-plugin} //allows you to embed a little comments/feedback section in your generator        
+fullscreenButton = {import:fullscreen-button-plugin} //fullscreen functionality        
+speak = {import:text-to-speech-plugin} //text to speech capabilit        
+literal = {import:literal-plugin} // automatically put backslashes in front of curly/square brackets in some text        
+remember = {import:unsafe-rememberchange} // allows you to save variables so they're not lost when the page is reloade        
+kv = {import:kv-plugin} //allows you to store data in a way that will remain accessible after page reload/close
+backgroundImage = {import:background-image-plugin} //allows you to easily set a background image for your generator
+
+// Headmaster's Tower Chatroom Configuration
+ceoChatOptions
+  channel = headmaster-tower-global-chat
+  channelLabel =  Headmaster's Tower
+  width = 100%
+  height = 600
+  commentPlaceholderText = Share your thoughts with fellow students...
+  submitButtonText =  Send Message
+  newestCommentsAtTop = false
+  forceColorScheme = dark
+  messageBubbleStyle = background:#1a1a2e; border:1px solid #b388ff; border-radius:10px; padding:12px; color:white;
+  messageFeedStyle = background:#0f0a1a; border-radius:10px; padding:10px;
+  inputAreaStyle = background:#1c1638; color:white; border:1px solid #b388ff; border-radius:8px; padding:10px;
+  submitButtonStyle = background:linear-gradient(135deg, #9b6dff 0%, #764ba2 100%); border:none; border-radius:8px; padding:10px 20px; color:white; font-weight:bold; cursor:pointer;
+  submitButtonSuccessText =  Sent!
+  loadFonts = Roboto
+  rateLimits = 3 per minute, 10 per 10 minutes
+  bannedWords = spam,scam,hack
+  adminPasswordHash = 9200d4638268e7e1579d9dda6471ea9d598e9fcab3f3bb7afe435fd8759149b9
+  adminFlair =  HEADMASTER
+  deleteButtonIcon = 
+  bannedUsers
+    // Add banned user IDs here (one per line) - click the red flag on messages to ban users
+
+// Note: Text that comes after "//" is ignored, which allows
+// you to write notes - like the one you're reading now!
+
+$meta
+  title = ⚡✨ Free-Use Magic Academy ✨⚡ – Idle Wizardry College Simulator
+  description = Build your magical academy. Enroll students, master spells, join houses, manage relationships. Embrace your power today!
+  image = https://user.uploads.dev/file/65b55815eff9a60a092320d3608b5619.png
+  tags = idle game, clicker, magic sim, wizardry college, harry potter, academy, management, ai npcs, free game, 18+
