@@ -12198,6 +12198,7 @@ function renderFacultyBand(bandEl, listEl) {
       </div>
       <div class="upg-state">
         <span class="pill num">$${formatNumber(f.salary || 0)}/yr</span>
+        <button class="btn btn--outline" onclick="showTeacherScheduleModal('${f.id}')">📅 Schedule</button>
         <button class="btn btn--outline" onclick="fireFaculty('${f.id}')">Dismiss</button>
       </div>
     </div>`;
@@ -12213,6 +12214,10 @@ function renderFacultyBand(bandEl, listEl) {
     let arrears = gameState.facultyPayroll?.arrears?.amount || 0;
     let arrearsNote = arrears > 0 ? ` · <span class="text-neg">$${formatNumber(arrears)} in payroll arrears</span>` : "";
     listEl.innerHTML += `<div class="fs-xs text-dim" style="margin-top: 4px">💰 Weekly payroll: $${formatNumber(weeklyCost)}${arrearsNote}</div>`;
+  }
+
+  if ("function" === typeof showStudentScheduleLookupModal) {
+    listEl.innerHTML += `<div style="margin-top: 8px"><button class="btn btn--outline" onclick="showStudentScheduleLookupModal()">🔍 Look Up a Student's Schedule</button></div>`;
   }
 
   let poolEl = document.getElementById("facultyPoolGrid");
@@ -12483,6 +12488,172 @@ function getCurriculumSummary() {
 }
 
 /* ===== END CURRICULUM SYSTEM ===== */
+
+/* =====================================================================
+   FUMA ACADEMICS OVERHAUL — SCHEDULE VIEWS (System 3 UI, first pass)
+   See docs/academics-overhaul-design.md (System 3) for the full design.
+   Two read-only views over the exact same gameState.sections data the
+   engine above already maintains — a teacher's roster and a student's
+   grid are never independently stored, so they cannot drift out of
+   sync with each other. Entry points: a "Schedule" button per row in
+   the Faculty band (teacher view), and a student lookup button below
+   it (student view). Both views drill into the same section-roster
+   modal when a period is clicked.
+   ===================================================================== */
+
+const YEAR_LABELS = ["", "Freshman", "Sophomore", "Junior", "Senior", "Graduate"];
+
+function getTeacherWeeklyGrid(teacherId) {
+  ensureCurriculumSystem();
+  let grid = {};
+  SCHEDULE_DAYS.forEach(d => { grid[d] = Array(PERIODS_PER_DAY).fill(null); });
+  gameState.sections.filter(sec => sec.teacherId === teacherId).forEach(sec => {
+    let subj = SUBJECTS.find(s => s.id === sec.subjectId);
+    let span = sec.isDouble ? 2 : 1;
+    sec.days.forEach(d => {
+      for (let k = 0; k < span; k++) {
+        let idx = sec.period - 1 + k;
+        if (idx >= 0 && idx < PERIODS_PER_DAY) {
+          grid[d][idx] = { subjectId: sec.subjectId, name: subj ? subj.name : sec.subjectId, sectionId: sec.id, enrolledCount: sec.enrolledStudentIds.length, capacity: sec.capacity };
+        }
+      }
+    });
+  });
+  return grid;
+}
+
+function renderWeeklyGridHTML(grid, opts) {
+  opts = opts || {};
+  let headerCells = "";
+  for (let p = 1; p <= PERIODS_PER_DAY; p++) headerCells += `<th style="padding:6px 8px; font-size:.75rem; color:var(--text-dim); font-weight:600;">Period ${p}</th>`;
+  let rows = SCHEDULE_DAYS.map(day => {
+    let cells = grid[day].map(cell => {
+      if (!cell) return `<td style="padding:4px; text-align:center; color:var(--text-mute); font-size:.8rem; border:1px solid var(--border);">—</td>`;
+      let subj = SUBJECTS.find(s => s.id === cell.subjectId);
+      let countNote = typeof cell.enrolledCount === "number" ? `<div style="font-size:.7rem; color:var(--text-dim);">${cell.enrolledCount}/${cell.capacity}</div>` : "";
+      return `<td style="padding:6px; text-align:center; border:1px solid var(--border); background:var(--surface-2); border-radius:6px; cursor:pointer;" onclick="showSectionRosterModal('${cell.sectionId}','${opts.returnType || ""}','${opts.returnId || ""}')">
+        <div style="font-size:.8rem; font-weight:600;">${subj ? subj.icon : "📘"} ${cell.name}</div>
+        ${countNote}
+      </td>`;
+    }).join("");
+    return `<tr><th style="padding:6px 8px; font-size:.8rem; color:var(--text-dim); text-align:left;">${day}</th>${cells}</tr>`;
+  }).join("");
+  return `<table style="width:100%; border-collapse:separate; border-spacing:4px;"><thead><tr><th></th>${headerCells}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+/* ===== END SCHEDULE VIEWS (data layer) ===== */
+
+function openScheduleOverlay(html) {
+  let existing = document.getElementById("scheduleModal");
+  existing && existing.remove();
+  let overlay = document.createElement("div");
+  overlay.id = "scheduleModal";
+  overlay.style.cssText = "position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:9000; display:flex; align-items:flex-start; justify-content:center; padding:20px; overflow:auto;";
+  overlay.innerHTML = `<div style="background:var(--surface); border:1px solid var(--border); border-radius:16px; max-width:900px; width:100%; max-height:90vh; overflow:auto; box-shadow:var(--shadow-2);">${html}</div>`;
+  overlay.addEventListener("click", e => { e.target === overlay && closeScheduleModal(); });
+  document.body.appendChild(overlay);
+}
+
+function closeScheduleModal() {
+  let el = document.getElementById("scheduleModal");
+  el && el.remove();
+}
+
+function showTeacherScheduleModal(teacherId) {
+  ensureFacultySystem();
+  let teacher = gameState.faculty.find(f => f.id === teacherId);
+  if (!teacher) return;
+  let subj = SUBJECTS.find(s => s.id === teacher.facultySubjectId);
+  let gridHTML = renderWeeklyGridHTML(getTeacherWeeklyGrid(teacherId), { returnType: "teacher", returnId: teacherId });
+  openScheduleOverlay(`
+    <div style="position:sticky; top:0; background:var(--surface); padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; z-index:10;">
+      <h3 style="margin:0; color:var(--text); font-size:1.1rem;">🎓 ${getColoredName(teacher)}'s Weekly Schedule</h3>
+      <button onclick="closeScheduleModal()" style="background:transparent; border:none; color:var(--text-dim); cursor:pointer; font-size:1.5rem;">×</button>
+    </div>
+    <div style="padding:16px 20px;">
+      <div style="color:var(--text-dim); font-size:.85rem; margin-bottom:12px;">${subj ? subj.icon + " " + subj.name : "Unassigned subject"} · Click any period to see who's enrolled.</div>
+      ${gridHTML}
+    </div>
+  `);
+}
+
+function showStudentScheduleModal(studentId) {
+  let student = (gameState.students || []).find(s => s.id === studentId);
+  if (!student) return;
+  let gridHTML = renderWeeklyGridHTML(getStudentWeeklyGrid(student), { returnType: "student", returnId: studentId });
+  openScheduleOverlay(`
+    <div style="position:sticky; top:0; background:var(--surface); padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; z-index:10;">
+      <h3 style="margin:0; color:var(--text); font-size:1.1rem;">📘 ${getColoredName(student)}'s Weekly Schedule</h3>
+      <button onclick="closeScheduleModal()" style="background:transparent; border:none; color:var(--text-dim); cursor:pointer; font-size:1.5rem;">×</button>
+    </div>
+    <div style="padding:16px 20px;">
+      <div style="color:var(--text-dim); font-size:.85rem; margin-bottom:12px;">${YEAR_LABELS[student.year] || "Year " + (student.year || "?")} · Click any period to see the full class roster.</div>
+      ${gridHTML}
+    </div>
+  `);
+}
+
+function showSectionRosterModal(sectionId, returnType, returnId) {
+  ensureCurriculumSystem();
+  let section = gameState.sections.find(s => s.id === sectionId);
+  if (!section) return;
+  let subj = SUBJECTS.find(s => s.id === section.subjectId);
+  let teacher = (gameState.faculty || []).find(f => f.id === section.teacherId);
+  let roster = section.enrolledStudentIds.map(id => (gameState.students || []).find(s => s.id === id)).filter(Boolean);
+  let periodLabel = section.isDouble ? `Periods ${section.period}-${section.period + 1}` : `Period ${section.period}`;
+  let rosterRows = roster.length
+    ? roster.map(s => `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; border-bottom:1px solid var(--border);"><span>${getColoredName(s)}</span><span class="pill">${YEAR_LABELS[s.year] || "Yr " + (s.year || "?")}</span></div>`).join("")
+    : '<div class="empty-note">No students enrolled yet.</div>';
+  let backBtn = returnType === "teacher" ? `<button class="btn btn--outline" onclick="showTeacherScheduleModal('${returnId}')">← Back to Schedule</button>`
+    : returnType === "student" ? `<button class="btn btn--outline" onclick="showStudentScheduleModal('${returnId}')">← Back to Schedule</button>`
+    : "";
+  openScheduleOverlay(`
+    <div style="position:sticky; top:0; background:var(--surface); padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; z-index:10;">
+      <h3 style="margin:0; color:var(--text); font-size:1.1rem;">${subj ? subj.icon + " " + subj.name : section.subjectId}</h3>
+      <button onclick="closeScheduleModal()" style="background:transparent; border:none; color:var(--text-dim); cursor:pointer; font-size:1.5rem;">×</button>
+    </div>
+    <div style="padding:16px 20px;">
+      <div style="color:var(--text-dim); font-size:.85rem; margin-bottom:4px;">Taught by ${teacher ? getColoredName(teacher) : "Unassigned"} · ${section.days.join("/")} · ${periodLabel}</div>
+      <div style="color:var(--text-dim); font-size:.85rem; margin-bottom:12px;">${roster.length}/${section.capacity} enrolled</div>
+      <div style="border:1px solid var(--border); border-radius:8px; overflow:hidden; margin-bottom:14px;">${rosterRows}</div>
+      ${backBtn}
+    </div>
+  `);
+}
+
+function renderScheduleStudentListRows(students) {
+  return students.length
+    ? students.map(s => `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; border-bottom:1px solid var(--border); cursor:pointer;" onclick="showStudentScheduleModal('${s.id}')"><span>${getColoredName(s)}</span><span class="pill">${YEAR_LABELS[s.year] || "Yr " + (s.year || "?")}</span></div>`).join("")
+    : '<div class="empty-note">No matches.</div>';
+}
+
+function getActiveStudentsSortedByName() {
+  return (gameState.students || []).filter(s => "active" === s.employmentStatus).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function showStudentScheduleLookupModal() {
+  let students = getActiveStudentsSortedByName();
+  openScheduleOverlay(`
+    <div style="position:sticky; top:0; background:var(--surface); padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; z-index:10;">
+      <h3 style="margin:0; color:var(--text); font-size:1.1rem;">🔍 Look Up a Student's Schedule</h3>
+      <button onclick="closeScheduleModal()" style="background:transparent; border:none; color:var(--text-dim); cursor:pointer; font-size:1.5rem;">×</button>
+    </div>
+    <div style="padding:16px 20px;">
+      <input type="text" id="scheduleStudentSearch" placeholder="Search by name…" oninput="filterScheduleStudentList(this.value)" style="width:100%; padding:8px 12px; margin-bottom:12px; border-radius:8px; border:1px solid var(--border); background:var(--surface-2); color:var(--text); box-sizing:border-box;">
+      <div id="scheduleStudentList" style="max-height:50vh; overflow:auto; border:1px solid var(--border); border-radius:8px;">${renderScheduleStudentListRows(students)}</div>
+    </div>
+  `);
+}
+
+function filterScheduleStudentList(query) {
+  let listEl = document.getElementById("scheduleStudentList");
+  if (!listEl) return;
+  let q = query.trim().toLowerCase();
+  let students = getActiveStudentsSortedByName().filter(s => !q || s.name.toLowerCase().includes(q));
+  listEl.innerHTML = renderScheduleStudentListRows(students);
+}
+
+/* ===== END SCHEDULE VIEWS (modals) ===== */
 
 document.addEventListener("DOMContentLoaded",initGame);</script>
 <script>function cycleGoldDisplay(){if(!(window.innerWidth>768)){var e=document.getElementById("goldCycleWrap");e&&e.classList.toggle("showing-persec")}}</script>
