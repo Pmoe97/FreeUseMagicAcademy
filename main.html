@@ -12163,6 +12163,13 @@ function hireFacultyCandidate(id) {
   gameState.faculty.push(candidate);
   let subjName = (SUBJECTS.find(s => s.id === candidate.facultySubjectId) || {}).name || "an unassigned subject";
   showNotification(`🎓 ${candidate.name} joins the faculty, teaching ${subjName}.`, "success");
+  // Hiring opens a Section for this teacher's subject (System 3 —
+  // Curriculum & Scheduling engine, appended later in this file) and
+  // immediately tries to slot waiting students into it.
+  if ("function" === typeof createSection) {
+    let newSection = createSection(candidate.facultySubjectId, candidate.id);
+    if (newSection && "function" === typeof enrollAllStudentsInSections) enrollAllStudentsInSections();
+  }
   updateUpgradesTab();
 }
 
@@ -12199,6 +12206,11 @@ function renderFacultyBand(bandEl, listEl) {
     </div>`;
   }).join("") : '<div class="empty-note">No faculty hired yet — recruit from the Candidate Pool below.</div>';
 
+  if ("function" === typeof getCurriculumSummary) {
+    let cs = getCurriculumSummary();
+    listEl.innerHTML += `<div class="fs-xs text-dim" style="margin-top: 8px">📚 ${cs.sectionCount} section${1 === cs.sectionCount ? "" : "s"} open · ${cs.scheduledCount}/${cs.studentCount} students have a schedule</div>`;
+  }
+
   let poolEl = document.getElementById("facultyPoolGrid");
   if (poolEl) {
     let pool = gameState.facultyCandidatePool;
@@ -12226,6 +12238,215 @@ function renderFacultyBand(bandEl, listEl) {
 }
 
 /* ===== END FACULTY SYSTEM ===== */
+
+/* =====================================================================
+   FUMA ACADEMICS OVERHAUL — CURRICULUM & SCHEDULING ENGINE (first pass)
+   See docs/academics-overhaul-design.md (System 3) for the full design.
+   Builds on the Faculty system above: hiring a teacher auto-opens a
+   Section for their subject; students auto-enroll into open Sections,
+   respecting year eligibility, teacher/section time conflicts, and
+   capacity. This is the scheduling *engine* only — a full weekly-grid
+   UI (replacing the old Academy tab clicker) is a separate follow-up
+   pass; for now schedules are computed/queryable via
+   getStudentWeeklyGrid() and a summary readout in the Faculty band.
+   ===================================================================== */
+
+const SCHEDULE_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const PATTERN_DAYS = { MWF: ["Mon", "Wed", "Fri"], MW: ["Mon", "Wed"], TTh: ["Tue", "Thu"], "6th-MWF": ["Mon", "Wed", "Fri"], "6th-TTh": ["Tue", "Thu"] };
+const PERIODS_PER_DAY = 4;
+const SECTION_CAPACITY = 16;
+
+function rollStudentYear() {
+  // Freshman..Graduate, skewed younger to resemble a real enrollment funnel.
+  let weights = [30, 26, 20, 14, 10];
+  let total = weights.reduce((a, b) => a + b, 0);
+  let roll = Math.random() * total;
+  for (let i = 0; i < weights.length; i++) {
+    if (roll < weights[i]) return i + 1;
+    roll -= weights[i];
+  }
+  return 1;
+}
+
+function ensureCurriculumSystem() {
+  Array.isArray(gameState.sections) || (gameState.sections = []);
+}
+
+function getSubjectPatternDays(subject) {
+  return PATTERN_DAYS[subject.pattern] || ["Mon", "Wed", "Fri"];
+}
+
+function isSubjectDouble(subject, year) {
+  if (subject.doublePeriod) return true;
+  if (subject.doublePeriodFromYear && year >= subject.doublePeriodFromYear) return true;
+  return false;
+}
+
+function teacherHasConflict(teacherId, day, period, span) {
+  ensureCurriculumSystem();
+  return gameState.sections.some(sec => {
+    if (sec.teacherId !== teacherId) return false;
+    if (!sec.days.includes(day)) return false;
+    let secSpan = sec.isDouble ? 2 : 1;
+    return period < sec.period + secSpan && sec.period < period + span;
+  });
+}
+
+function countSectionsOverlapping(day, period, span) {
+  ensureCurriculumSystem();
+  return gameState.sections.filter(sec => {
+    if (!sec.days.includes(day)) return false;
+    let secSpan = sec.isDouble ? 2 : 1;
+    return period < sec.period + secSpan && sec.period < period + span;
+  }).length;
+}
+
+function createSection(subjectId, teacherId) {
+  ensureCurriculumSystem();
+  let subject = SUBJECTS.find(s => s.id === subjectId);
+  if (!subject) return null;
+  let teacher = (gameState.faculty || []).find(f => f.id === teacherId);
+  if (!teacher) return null;
+  let days = getSubjectPatternDays(subject);
+  // Sections are taught at whichever double-period tier the subject can
+  // reach; a student's actual meeting length is still governed by their
+  // own year via isSubjectDouble() when the grid is read.
+  let isDouble = !!subject.doublePeriod || !!subject.doublePeriodFromYear;
+  let span = isDouble ? 2 : 1;
+  let maxStartPeriod = PERIODS_PER_DAY - span + 1;
+  // Pick the least-congested valid period rather than always the first
+  // one: sections from *different* teachers/subjects on the same days
+  // still compete for a single student's schedule, so naively defaulting
+  // to period 1 every time would stack every MWF (or every TTh) subject
+  // on top of each other and make it impossible for a student to take
+  // more than one of them.
+  let period = null;
+  let bestLoad = Infinity;
+  for (let p = 1; p <= maxStartPeriod; p++) {
+    if (!days.every(d => !teacherHasConflict(teacherId, d, p, span))) continue;
+    let load = days.reduce((sum, d) => sum + countSectionsOverlapping(d, p, span), 0);
+    if (load < bestLoad) { bestLoad = load; period = p; }
+  }
+  if (period === null) return null; // this teacher's week is already full
+  let section = {
+    id: "sec_" + subjectId + "_" + teacherId + "_" + Date.now() + "_" + Math.floor(Math.random() * 1e4),
+    subjectId, teacherId, days, period, isDouble,
+    capacity: SECTION_CAPACITY, enrolledStudentIds: []
+  };
+  gameState.sections.push(section);
+  return section;
+}
+
+function getSubjectTargetsForYear(year) {
+  let core = SUBJECTS.filter(s => "core" === s.category && s.years.includes(year)).map(s => s.id);
+  let advanced = SUBJECTS.filter(s => "advanced" === s.category && s.years.includes(year)).map(s => s.id);
+  return { core, advanced, advancedTarget: year >= 3 ? 2 : 0 };
+}
+
+function studentHasConflict(student, section) {
+  let span = section.isDouble ? 2 : 1;
+  return (student.scheduledSectionIds || []).some(id => {
+    let sec = (gameState.sections || []).find(s => s.id === id);
+    if (!sec) return false;
+    if (!sec.days.some(d => section.days.includes(d))) return false;
+    let secSpan = sec.isDouble ? 2 : 1;
+    return section.period < sec.period + secSpan && sec.period < section.period + span;
+  });
+}
+
+function enrollStudentInSection(student, section) {
+  if (section.enrolledStudentIds.length >= section.capacity) return false;
+  if (section.enrolledStudentIds.includes(student.id)) return false;
+  if (studentHasConflict(student, section)) return false;
+  section.enrolledStudentIds.push(student.id);
+  student.scheduledSectionIds || (student.scheduledSectionIds = []);
+  student.scheduledSectionIds.push(section.id);
+  return true;
+}
+
+function autoEnrollStudentInSections(student) {
+  ensureCurriculumSystem();
+  student.year || (student.year = rollStudentYear());
+  student.scheduledSectionIds || (student.scheduledSectionIds = []);
+  let alreadyOn = new Set(student.scheduledSectionIds.map(id => {
+    let sec = gameState.sections.find(s => s.id === id);
+    return sec ? sec.subjectId : null;
+  }));
+  let targets = getSubjectTargetsForYear(student.year);
+  // Prefer advanced electives that actually have an open section before
+  // ones that don't — otherwise the advancedTarget cap can get spent on
+  // subjects with no hired teacher yet, catalog-order first, crowding
+  // out a genuinely available subject later in the list.
+  let availableAdvanced = targets.advanced.filter(id => !alreadyOn.has(id));
+  availableAdvanced.sort((a, b) => {
+    let aHas = gameState.sections.some(s => s.subjectId === a) ? 0 : 1;
+    let bHas = gameState.sections.some(s => s.subjectId === b) ? 0 : 1;
+    return aHas - bHas;
+  });
+  let subjectQueue = targets.core.filter(id => !alreadyOn.has(id))
+    .concat(availableAdvanced.slice(0, targets.advancedTarget));
+  // Double-period subjects need two consecutive free slots, which is a
+  // much tighter constraint than a single period — place them first so
+  // single-period subjects fill in around them instead of the reverse
+  // (which would let singles grab every slot and leave no room for any
+  // double period to ever fit).
+  // Secondary tiebreak: a subject with only one candidate section is far
+  // more likely to get shut out by an earlier subject's greedy pick than
+  // one with several sections to fall back on, so schedule the scarce
+  // ones first ("most-constrained-first" — a simple, cheap approximation
+  // of real timetabling; this is a greedy heuristic, not an optimal
+  // solver, so a perfect-fit schedule still isn't guaranteed in every
+  // case).
+  subjectQueue.sort((a, b) => {
+    let subjA = SUBJECTS.find(s => s.id === a), subjB = SUBJECTS.find(s => s.id === b);
+    let aDouble = subjA ? isSubjectDouble(subjA, student.year) : false;
+    let bDouble = subjB ? isSubjectDouble(subjB, student.year) : false;
+    if (aDouble !== bDouble) return (bDouble ? 1 : 0) - (aDouble ? 1 : 0);
+    let aOptions = gameState.sections.filter(s => s.subjectId === a).length;
+    let bOptions = gameState.sections.filter(s => s.subjectId === b).length;
+    return aOptions - bOptions;
+  });
+  subjectQueue.forEach(subjectId => {
+    let candidates = gameState.sections.filter(s => s.subjectId === subjectId);
+    for (let sec of candidates) {
+      if (enrollStudentInSection(student, sec)) break;
+    }
+  });
+}
+
+function enrollAllStudentsInSections() {
+  (gameState.students || []).forEach(autoEnrollStudentInSections);
+}
+
+function getStudentWeeklyGrid(student) {
+  let grid = {};
+  SCHEDULE_DAYS.forEach(d => { grid[d] = Array(PERIODS_PER_DAY).fill(null); });
+  (student.scheduledSectionIds || []).forEach(id => {
+    let sec = (gameState.sections || []).find(s => s.id === id);
+    if (!sec) return;
+    let subj = SUBJECTS.find(s => s.id === sec.subjectId);
+    let span = sec.isDouble ? 2 : 1;
+    sec.days.forEach(d => {
+      for (let k = 0; k < span; k++) {
+        let idx = sec.period - 1 + k;
+        if (idx >= 0 && idx < PERIODS_PER_DAY) {
+          grid[d][idx] = { subjectId: sec.subjectId, name: subj ? subj.name : sec.subjectId, teacherId: sec.teacherId, sectionId: sec.id };
+        }
+      }
+    });
+  });
+  return grid;
+}
+
+function getCurriculumSummary() {
+  ensureCurriculumSystem();
+  let sections = gameState.sections;
+  let students = gameState.students || [];
+  let scheduledCount = students.filter(s => (s.scheduledSectionIds || []).length > 0).length;
+  return { sectionCount: sections.length, studentCount: students.length, scheduledCount };
+}
+
+/* ===== END CURRICULUM SYSTEM ===== */
 
 document.addEventListener("DOMContentLoaded",initGame);</script>
 <script>function cycleGoldDisplay(){if(!(window.innerWidth>768)){var e=document.getElementById("goldCycleWrap");e&&e.classList.toggle("showing-persec")}}</script>
