@@ -12167,6 +12167,7 @@ function hireFacultyCandidate(id) {
     let newSection = createSection(candidate.facultySubjectId, candidate.id);
     if (newSection && "function" === typeof enrollAllStudentsInSections) enrollAllStudentsInSections();
   }
+  "function" === typeof refreshOpenScheduleModal && refreshOpenScheduleModal();
   updateUpgradesTab();
 }
 
@@ -12177,7 +12178,22 @@ async function fireFaculty(id) {
   let f = gameState.faculty[idx];
   if (!await showConfirm(`Let ${f.name} go? This cannot be undone.`, "Dismiss Faculty", { type: "warning", confirmText: "Dismiss" })) return;
   gameState.faculty.splice(idx, 1);
+  // Firing a teacher also tears down their sections — otherwise a student's
+  // grid would keep showing a class taught by nobody, and a stale section
+  // would keep lingering in gameState.sections after its teacher's own
+  // schedule view (removed from the Faculty band) is no longer reachable.
+  if ("function" === typeof ensureCurriculumSystem) {
+    ensureCurriculumSystem();
+    let removedSectionIds = gameState.sections.filter(sec => sec.teacherId === id).map(sec => sec.id);
+    if (removedSectionIds.length) {
+      gameState.sections = gameState.sections.filter(sec => sec.teacherId !== id);
+      (gameState.students || []).forEach(s => {
+        s.scheduledSectionIds && (s.scheduledSectionIds = s.scheduledSectionIds.filter(secId => !removedSectionIds.includes(secId)));
+      });
+    }
+  }
   showNotification(`${f.name} has left the faculty.`, "info");
+  "function" === typeof refreshOpenScheduleModal && refreshOpenScheduleModal();
   updateUpgradesTab();
 }
 
@@ -12543,6 +12559,15 @@ function renderWeeklyGridHTML(grid, opts) {
 
 /* ===== END SCHEDULE VIEWS (data layer) ===== */
 
+// Tracks which schedule view is currently on screen (if any), so
+// refreshOpenScheduleModal() can re-render it in place. Every show*
+// function below rebuilds its HTML fresh from gameState on every call
+// — nothing is cached — so any future schedule-editing feature only
+// needs to call refreshOpenScheduleModal() after mutating enrollment
+// for every open view (teacher grid, student grid, roster, lookup) to
+// reflect the change immediately, without knowing which one is open.
+let scheduleModalContext = null;
+
 function openScheduleOverlay(html) {
   let existing = document.getElementById("scheduleModal");
   existing && existing.remove();
@@ -12557,12 +12582,23 @@ function openScheduleOverlay(html) {
 function closeScheduleModal() {
   let el = document.getElementById("scheduleModal");
   el && el.remove();
+  scheduleModalContext = null;
+}
+
+function refreshOpenScheduleModal() {
+  if (!scheduleModalContext || !document.getElementById("scheduleModal")) return;
+  let ctx = scheduleModalContext;
+  if ("teacher" === ctx.type) showTeacherScheduleModal(ctx.id);
+  else if ("student" === ctx.type) showStudentScheduleModal(ctx.id);
+  else if ("roster" === ctx.type) showSectionRosterModal(ctx.id, ctx.returnType, ctx.returnId);
+  else if ("lookup" === ctx.type) showStudentScheduleLookupModal();
 }
 
 function showTeacherScheduleModal(teacherId) {
   ensureFacultySystem();
   let teacher = gameState.faculty.find(f => f.id === teacherId);
   if (!teacher) return;
+  scheduleModalContext = { type: "teacher", id: teacherId };
   let subj = SUBJECTS.find(s => s.id === teacher.facultySubjectId);
   let gridHTML = renderWeeklyGridHTML(getTeacherWeeklyGrid(teacherId), { returnType: "teacher", returnId: teacherId });
   openScheduleOverlay(`
@@ -12580,6 +12616,7 @@ function showTeacherScheduleModal(teacherId) {
 function showStudentScheduleModal(studentId) {
   let student = (gameState.students || []).find(s => s.id === studentId);
   if (!student) return;
+  scheduleModalContext = { type: "student", id: studentId };
   let gridHTML = renderWeeklyGridHTML(getStudentWeeklyGrid(student), { returnType: "student", returnId: studentId });
   openScheduleOverlay(`
     <div style="position:sticky; top:0; background:var(--surface); padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; z-index:10;">
@@ -12597,6 +12634,7 @@ function showSectionRosterModal(sectionId, returnType, returnId) {
   ensureCurriculumSystem();
   let section = gameState.sections.find(s => s.id === sectionId);
   if (!section) return;
+  scheduleModalContext = { type: "roster", id: sectionId, returnType, returnId };
   let subj = SUBJECTS.find(s => s.id === section.subjectId);
   let teacher = (gameState.faculty || []).find(f => f.id === section.teacherId);
   let roster = section.enrolledStudentIds.map(id => (gameState.students || []).find(s => s.id === id)).filter(Boolean);
@@ -12632,6 +12670,7 @@ function getActiveStudentsSortedByName() {
 }
 
 function showStudentScheduleLookupModal() {
+  scheduleModalContext = { type: "lookup" };
   let students = getActiveStudentsSortedByName();
   openScheduleOverlay(`
     <div style="position:sticky; top:0; background:var(--surface); padding:16px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; z-index:10;">
