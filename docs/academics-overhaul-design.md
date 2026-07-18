@@ -12,6 +12,8 @@ None of this reflects "headmaster manages a school." The goal of this plan is to
 
 This plan is the result of extensive clarification with the user (5 rounds of questions) and is meant to be saved as a permanent design reference in the repo, followed by a phased implementation.
 
+**Update (post-implementation-start):** the user intentionally runs multiple parallel Claude Code sessions against this repo. A separate concurrent session (PRs #1–#4, "harry-potter-creative-pass"/"harry-potter-game-overhaul") independently built a real House system, retitled the student career ladder away from corporate language, and did a content-cleanup pass on remaining business-tier names — all before any of that was reflected in this doc. The Houses/Dueling sections below (System 6/7) have been reconciled against what actually exists; see the "Existing implementation" notes inline. Future sessions picking up this doc should `git fetch`/check `origin/master` for drift before assuming the doc is current.
+
 ## Design Pillars
 
 1. **Every period is a place.** Classes, tutoring sessions, and sporting events are all "visitable" — the Headmaster (and other characters) can attend live for an interactive scene, or let it auto-resolve via formula. Attendance is data that feeds back into outcomes.
@@ -26,7 +28,7 @@ This plan is the result of extensive clarification with the user (5 rounds of qu
 
 **Out of scope (untouched):** Social tab, Gifts tab, Groups tab (this is multi-person chat, not houses — confirmed via code read), Story tab, Headmaster's Tower chat. These are the relationship/roleplay layer and are not part of the "Business" gutting.
 
-**Note on Houses:** Houses currently exist only as a loose filter attribute on the People tab roster ("All Houses" dropdown) with no dedicated management surface. This plan substantially upgrades what a House *is* (see System 6), even though no dedicated "Houses tab" is being added — house data/UI lives inside People + the new Reputation/Sports surfaces.
+**Note on Houses (updated):** Houses are no longer a loose filter attribute — a concurrent session already built a real House system (see System 6's "Existing implementation" note). This plan's job now is to layer the *external* rival-school competition and curriculum/scheduling integration on top of that existing internal house system, not to build houses from scratch.
 
 ---
 
@@ -111,7 +113,18 @@ This is a draft for review, not final — the specific subject list and exact me
 - Reputation is a first-class currency alongside Money, driven by aggregate grades, sports results, and faculty quality.
 - **Real rival schools** (3–5), each with their own tracked reputation/stats and a visible ranking/comparison — not just flavor text.
 - **Two competition layers**: Houses compete against each other *within* the school (internal rivalry, house standings), and the school as a whole competes against rival schools (external rivalry). Sporting events are the primary mechanical expression of both layers — some matches are house-vs-house, some are school-vs-school.
-- **Houses get a full data model (confirmed)**: this is real added scope beyond simple visual grouping, explicitly confirmed by the user. Houses become a first-class entity with: roster membership, house points/standing (feeding internal rivalry), and a representative team pool drawn from Sports/Dueling elective enrollees (feeding external rivalry via System 7). No dedicated "Houses tab" is planned — this data surfaces inside People and the Reputation/Sports views — but the underlying model should support it properly rather than remaining a loose filter attribute.
+- **Houses get a full data model (confirmed)**: this is real added scope beyond simple visual grouping, explicitly confirmed by the user. No dedicated "Houses tab" is planned — this data surfaces inside People and the Reputation/Sports views.
+
+**Existing implementation (already built by a concurrent session, PRs #1–#4 — reuse, don't rebuild):**
+- `HOUSES` constant: 4 houses (Griffinmoor 🦁, Serpentyne, Ravensworth, Badgerholt), each with id/displayName/emoji/crest/mascot/motto/traits/personalityHint/colors/uniformPalette/commonRoomFlavor.
+- `student.house` — every student is assigned a house (`pickHouseForNewStudent`, `assignHouseAndUniform`), with uniforms generated per-house (`generateHouseUniform`).
+- `gameState.houseStandings` — a simple `{houseId: points}` map. `awardHousePoints(houseId, points, reason)` adjusts it with a notification; `updateHouseStandingsUI()` renders it into `#houseStandingsList` (the House Cup).
+- House-vs-house dueling already exists: `getHouseChampion(houseId)` picks a house's strongest eligible student by stats, `runHouseDuel(houseA, houseB)` / `triggerRandomHouseDuel()` resolve a formula-driven outcome with flavor-text lines and award house points to the winner.
+- A **"Prefect" naming collision** exists in the codebase: the old clicker-automation "prefect assigned to a class" system (`getPrefectBonuses`, `prefectAssigned`, `getPrefectUpgradeCost`, etc.) is untouched, while the concurrent session *also* added `isPrefect(student)` as a new in-house student social-hierarchy role (`showPrefectEnrollmentModal`, `selectPrefectCandidate`, `enrollOrUpgradePrefect`). Both meanings now coexist under the same word. Not blocking, but worth disambiguating (e.g. renaming one) before either system grows further — flagged in Open Items.
+
+**Still to build (this plan's actual remaining scope for System 6):** the *external* rival-school layer (3–5 named rival schools, their own reputation tracking, school-vs-school competition) — nothing like `RIVAL_SCHOOLS` exists yet, confirmed via code search. The Reputation formula below should treat `gameState.houseStandings` as the data source for its internal-house-competition sub-component rather than inventing a parallel points system.
+
+**Open design tension:** `getHouseChampion` currently picks a house's strongest *any* student by stats, with no gate on Dueling/Sports elective enrollment. This plan's System 7 originally assumed only elective-enrolled students are eligible to represent a house/school. Reconciling these (should champion-picking start respecting elective enrollment once Curriculum/Scheduling exists, or is "any strong student can be tapped" the intended feel?) needs a decision — see Open Items.
 
 ### Reputation Formula (draft)
 
@@ -158,6 +171,7 @@ This roster is a draft for tone-setting; exact stat weightings per rival, and th
 - Sporting events rotate on Saturdays (System 3's weekend slot) and follow the attend-live-or-simulate pattern.
 - The existing 1v1 QTE Duel modal (`duelFightModal` and related — currently a standalone Headmaster-vs-NPC combat minigame) gets folded into this: Dueling becomes a combat-magic elective/subject, and its practice sessions and matches are visitable scenes using a similar interactive-resolution style, scaled up to support team/house/school-level competitive events (not just solo Headmaster combat).
 - **Dashboard "Duel Progress" widget (confirmed): removed.** The old dashboard slot (`dashDuelProgress`) that linked to the standalone duel minigame is dropped entirely rather than repurposed — sports/dueling standings and upcoming events live only within the Electives/Sports and Reputation surfaces, not on the main dashboard.
+- **Existing implementation note:** house-vs-house Dueling (`runHouseDuel`/`triggerRandomHouseDuel`/`getHouseChampion`) already exists and works today (see System 6) — this system's job is to wrap that existing mechanic into the curriculum/scheduling structure (6th period, opt-in enrollment, Saturday event cadence) and extend it to school-vs-school, not to build dueling resolution logic from scratch. Skyclash (the flagship broom-sport) is still entirely novel and needs building.
 
 ## System 8: Discipline & Misconduct
 
@@ -211,6 +225,8 @@ Recommended replacement for the "Graduate Now" hard-reset + Influence Points:
 2. **[Drafted, needs review]** Reputation formula and rival-school model (System 6) — a full weighted formula, Rank Tiers, unlock effects, and a 4-school rival roster with distinct personalities are now drafted. Needs the user's review/edits, and the rival "periodic tick" formula still needs to be finalized alongside implementation.
 3. **[Stub-then-refine]** Confirm the Legacy/Endowment meta-progression concept (System 11) in more detail — this was proposed, not directly asked; can launch with a placeholder and be refined later.
 4. **[Stub-then-refine]** Define the Conduct meter's specific triggers/thresholds and the new dedicated intensity setting's scale/labels (System 8) — can launch with reasonable defaults and be tuned later.
+5. **[Needs a decision]** Should `getHouseChampion`'s "pick any strong student" logic start respecting Dueling/Sports elective enrollment once Curriculum/Scheduling (System 3) exists, or is "any strong student can be tapped as champion" the intended feel regardless of enrollment? See System 6's "Open design tension."
+6. **[Low priority, not blocking]** The word "Prefect" now means two different things in the codebase (old clicker-automation class-manager vs. new in-house student social role). Consider disambiguating one of them before either system grows further.
 
 ## Verification
 
